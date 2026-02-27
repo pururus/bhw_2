@@ -29,7 +29,7 @@ class LanguageModel(nn.Module):
         self.embedding_en = nn.Embedding(self.vocab_size_en, embed_size, padding_idx=self.dataset.pad_id_en)
         self.embedding_de = nn.Embedding(self.vocab_size_de, embed_size, padding_idx=self.dataset.pad_id_de)
         self.rnn_encoder = rnn_type(embed_size, hidden_size, rnn_layers, batch_first=True)
-        self.rnn_decoder = rnn_type(embed_size, hidden_size, rnn_layers, batch_first=True)
+        self.rnn_decoder = rnn_type(embed_size + hidden_size, hidden_size, rnn_layers, batch_first=True)
         self.linear = nn.Linear(hidden_size, self.vocab_size_en)
 
     def forward(self, indices: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
@@ -46,9 +46,15 @@ class LanguageModel(nn.Module):
         and apply output linear layer to obtain the logits
         """
         emb = pack_padded_sequence(self.embedding_de(indices[0]), lengths[0], batch_first=True, enforce_sorted=False)
-        emb_en = pack_padded_sequence(self.embedding_en(indices[1]), lengths[1], batch_first=True, enforce_sorted=False)
 
-        out, h = self.rnn_encoder(emb)
+        out_enc, h = self.rnn_encoder(emb)
+        
+        out_enc, _ = pad_packed_sequence(out_enc, batch_first=True, total_length=indices[1].shape[1])
+        emb_en = self.embedding_en(indices[1])
+
+        emb_en = torch.concat((emb_en, torch.tile(out_enc[:, -1:, :], (1, emb_en.shape[1], 1))), axis=2)
+        emb_en = pack_padded_sequence(emb_en, lengths[1], batch_first=True, enforce_sorted=False)
+        
         out, _ = self.rnn_decoder(emb_en, h)
         out, _ = pad_packed_sequence(out, batch_first=True, total_length=lengths[1].max())
         logits = self.linear(out)
@@ -74,23 +80,27 @@ class LanguageModel(nn.Module):
         until EOS token or reaching self.max_length.
         Do not forget to divide predicted logits by temperature before sampling
         """
-        tokenized_prefix = [self.dataset.bos_id_de] + self.dataset.text2ids(prefix)
-        emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
-        eos_emb = self.dataset.eos_id_en
-        tokenized_translation = []
-        out, h = self.rnn_encoder(emb)
+        with torch.no_grad():
+            tokenized_prefix = [self.dataset.bos_id_de] + self.dataset.text2ids(prefix)
+            emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
+            eos_emb = self.dataset.eos_id_en
+            tokenized_translation = []
+            out_enc, h = self.rnn_encoder(emb)
 
-        beginings = torch.tensor([[self.dataset.bos_id_en]])
-        emb = self.embedding_de(beginings.to(device = next(self.parameters()).device))
-        for _ in range(self.dataset.max_length):
-            out, h = self.rnn_decoder(emb, h)
-            logits = self.linear(out)[:, -1:, :] / temp
-            probs = torch.softmax(logits[0], dim=-1)
-            new_token = torch.multinomial(probs, num_samples=1)
-            tokenized_translation.append(new_token.item())
-            if new_token == eos_emb:
-                break
+            beginings = torch.tensor([[self.dataset.bos_id_en]])
+            emb = self.embedding_de(beginings.to(device = next(self.parameters()).device))
             
-            emb = self.embedding_en(new_token)
+            emb = torch.concat((emb, out_enc[:, -1:, :]), axis=2)
+            for _ in range(self.dataset.max_length):
+                out, h = self.rnn_decoder(emb, h)
+                logits = self.linear(out)[:, -1:, :] / temp
+                probs = torch.softmax(logits[0], dim=-1)
+                new_token = torch.multinomial(probs, num_samples=1)
+                if new_token == eos_emb:
+                    break
+                tokenized_translation.append(new_token.item())
+                
+                emb = self.embedding_en(new_token)
+                emb = torch.concat((emb, out_enc[:, -1:, :]), axis=2)
 
-        return self.dataset.ids2text(tokenized_translation)
+            return self.dataset.ids2text(tokenized_translation)
