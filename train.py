@@ -120,7 +120,7 @@ def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Opt
     :param num_examples: number of generation examples to print after each epoch
     """
     train_losses, val_losses = [], []
-    criterion = nn.CrossEntropyLoss(ignore_index=train_loader.dataset.pad_id_en)
+    criterion = nn.CrossEntropyLoss(ignore_index=model.dataset.pad_id_en)
 
     for epoch in range(1, num_epochs + 1):
         train_loss = training_epoch(
