@@ -30,6 +30,8 @@ class WordTokenizer():
             lines = f.readlines()
             for line in lines:
                 for word in line.split(" "):
+                    if word == "\n":
+                        continue
                     if word not in counter:
                         counter[word] = 1
                     else:
@@ -41,29 +43,29 @@ class WordTokenizer():
                     self.dictionary_encode[token] = self.vocab_size
                     self.dictionary_decode[self.vocab_size] = token
                     self.vocab_size += 1
+        
+        assert "\n" not in self.dictionary_encode
         return self
     
     def encode(self, texts: Union[str, List[str]]):
         if isinstance(texts, str):
-            return [self.bos_id] + list(map(lambda x: self._code_token(x, self.dictionary_encode), texts.split(" "))) + [self.eos_id]
+            return list(map(lambda x: self._code_token(x, self.dictionary_encode), texts.split(" ")))
         
         res = []
         for line in texts:
-            res.append([self.bos_id] + list(map(lambda x: self._code_token(x, self.dictionary_encode), line.split(" "))) + [self.eos_id])
+            res.append(list(map(lambda x: self._code_token(x, self.dictionary_encode), line.split(" "))))
         return res
     
     def decode(self, ids: Union[List[int], List[List[int]]]):
         if isinstance(ids[0], int):
-            return " ".join(list(map(lambda x: self._code_token(x, self.dictionary_decode), ids)))
+            return " ".join(list(map(lambda x: self._code_token(x, self.dictionary_decode), ids))[1:-1])
         
         res = []
         for line in ids:
-            res.append(" ".join(list(map(lambda x: self._code_token(x, self.dictionary_decode), line))))
+            res.append(" ".join(list(map(lambda x: self._code_token(x, self.dictionary_decode), line))[1:-1]))
         return res
         
     def _code_token(self, token, dict):
-        if token == "\n":
-            return self.eos_id
         if token in dict:
             return dict[token]
         
@@ -90,10 +92,14 @@ class TextDataset(Dataset):
         
         with open(data_file, encoding="utf-8") as file:
             self.texts_de = file.readlines()
-        
+            for i in range(len(self.texts_de)):
+                self.texts_de[i] = self.texts_de[i].replace("\n", "")
+
         if target_file is not None:
             with open(target_file, encoding="utf-8") as file:
                 self.texts_en = file.readlines()
+                for i in range(len(self.texts_en)):
+                    self.texts_en[i] = self.texts_en[i].replace("\n", "")
         
         self.tokenizer_de = WordTokenizer(min_samples=min_samples).fit(data_file)
         self.tokenizer_en = WordTokenizer(min_samples=min_samples).fit(target_file)
@@ -184,4 +190,4 @@ class TextDataset(Dataset):
         indices_de  += [self.pad_id_de for _ in range(self.max_length - len(indices_de))]
         
         
-        return (torch.tensor(indices_de), torch.tensor(indices_en)), (length_en, length_de)
+        return (torch.tensor(indices_de), torch.tensor(indices_en)), (length_de, length_en)
