@@ -81,7 +81,7 @@ class LanguageModel(nn.Module):
         Do not forget to divide predicted logits by temperature before sampling
         """
         with torch.no_grad():
-            tokenized_prefix = [self.dataset.bos_id_de] + self.dataset.text2ids(prefix)
+            tokenized_prefix = self.dataset.text2ids(prefix)
             emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
             eos_emb = self.dataset.eos_id_en
             tokenized_translation = []

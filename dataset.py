@@ -45,11 +45,11 @@ class WordTokenizer():
     
     def encode(self, texts: Union[str, List[str]]):
         if isinstance(texts, str):
-            return list(map(lambda x: self._code_token(x, self.dictionary_encode), texts.split(" ")))
+            return [self.bos_id] + list(map(lambda x: self._code_token(x, self.dictionary_encode), texts.split(" "))) + [self.eos_id]
         
         res = []
         for line in texts:
-            res.append(list(map(lambda x: self._code_token(x, self.dictionary_encode), line.split(" "))))
+            res.append([self.bos_id] + list(map(lambda x: self._code_token(x, self.dictionary_encode), line.split(" "))) + [self.eos_id])
         return res
     
     def decode(self, ids: Union[List[int], List[List[int]]]):
@@ -76,7 +76,7 @@ class TextDataset(Dataset):
     TRAIN_VAL_RANDOM_SEED = 42
     VAL_RATIO = 0.05
 
-    def __init__(self, data_file: str, target_file: Optional[str], train: bool = True, max_length: int = 128):
+    def __init__(self, data_file: str, target_file: Optional[str], train: bool = True, max_length: int = 128, min_samples=5):
         """
         Dataset with texts, supporting BPE tokenizer
         :param data_file: txt file containing texts
@@ -95,8 +95,8 @@ class TextDataset(Dataset):
             with open(target_file, encoding="utf-8") as file:
                 self.texts_en = file.readlines()
         
-        self.tokenizer_de = WordTokenizer().fit(data_file)
-        self.tokenizer_en = WordTokenizer().fit(target_file)
+        self.tokenizer_de = WordTokenizer(min_samples=min_samples).fit(data_file)
+        self.tokenizer_en = WordTokenizer(min_samples=min_samples).fit(target_file)
 
         """
         YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
