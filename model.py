@@ -104,3 +104,103 @@ class LanguageModel(nn.Module):
                 emb = torch.concat((emb, out_enc[:, -1:, :]), axis=2)
 
             return self.dataset.ids2text(tokenized_translation)
+
+class LanguageModelTransformer(nn.Module):
+    def __init__(self, dataset: TextDataset, 
+                 d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6, 
+                 dim_feedforward=2048, dropout=0.1):
+        """
+        Model for text generation
+        :param dataset: text data dataset (to extract vocab_size and max_length)
+        :param embed_size: dimensionality of embeddings
+        :param hidden_size: dimensionality of hidden state
+        :param rnn_type: type of RNN layer (nn.RNN or nn.LSTM)
+        :param rnn_layers: number of layers in RNN
+        """
+        super().__init__()
+        self.dataset = dataset  # required for decoding during inference
+        self.vocab_size_en = dataset.vocab_size_en
+        self.vocab_size_de = dataset.vocab_size_de
+        self.max_length = dataset.max_length
+
+        """
+        YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
+        Create necessary layers
+        """
+        self.embedding_en = nn.Embedding(self.vocab_size_en, d_model, padding_idx=self.dataset.pad_id_en)
+        self.embedding_de = nn.Embedding(self.vocab_size_de, d_model, padding_idx=self.dataset.pad_id_de)
+        self.trans = nn.Transformer(d_model=d_model, nhead=nhead, num_encoder_layers=num_encoder_layers,
+                                    num_decoder_layers=num_decoder_layers, dim_feedforward=dim_feedforward,
+                                    dropout=dropout, batch_first=True)         
+        self.linear = nn.Linear(d_model, self.vocab_size_en)
+
+    def forward(self, indices: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """
+        Compute forward pass through the model and
+        return logits for the next token probabilities
+        :param indices: LongTensor of encoded tokens of size (batch_size, input length)
+        :param lengths: LongTensor of lengths of size (batch_size, )
+        :return: FloatTensor of logits of shape (batch_size, output length, vocab_size)
+        """
+        """
+        YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
+        Convert indices to embeddings, pass them through recurrent layers
+        and apply output linear layer to obtain the logits
+        """
+        emb = self.embedding_de(indices[0])
+        emb_en = self.embedding_en(indices[1])
+        device = next(self.trans.parameters()).device
+        
+        out = self.trans(emb, emb_en,
+                            tgt_mask=nn.Transformer.generate_square_subsequent_mask(emb_en.shape[1], device=device),
+                            src_padding_mask=(indices[0]==self.dataset.pad_id_de),
+                            tgt_padding_mask=(indices[1]==self.dataset.pad_id_en))
+        logits = self.linear(out)
+        
+        return logits
+
+    @torch.inference_mode()
+    def inference(self, prefix: str = '', temp: float = 1.) -> str:
+        """
+        Generate new text with an optional prefix
+        :param prefix: prefix to start generation
+        :param temp: sampling temperature
+        :return: generated text
+        """
+        self.eval()
+        # This is a placeholder, you may remove it.
+        generated = prefix + ', а потом купил мужик шляпу, а она ему как раз.'
+        """
+        YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
+        Encode the prefix (do not forget the BOS token!),
+        pass it through the model to accumulate RNN hidden state and
+        generate new tokens sequentially, sampling from categorical distribution,
+        until EOS token or reaching self.max_length.
+        Do not forget to divide predicted logits by temperature before sampling
+        """
+        device = next(self.trans.parameters()).device
+        with torch.no_grad():
+            tokenized_prefix = self.dataset.text2ids(prefix)
+            emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
+            eos_emb = self.dataset.eos_id_en
+            tokenized_translation = []
+            
+            beginings = torch.tensor([[self.dataset.bos_id_en]])
+            emb_en = self.embedding_en(beginings.to(device = next(self.parameters()).device))
+            
+            context = self.trans.encoder(emb)
+            
+            for _ in range(self.dataset.max_length):
+                out = self.trans.decoder(emb_en, context, 
+                                         tgt_mask=nn.Transformer.generate_square_subsequent_mask(emb_en.shape[1], device=device))
+                logits = self.linear(out)[:, -1:, :] / temp
+                probs = torch.softmax(logits[0], dim=-1)
+                new_token = torch.multinomial(probs, num_samples=1)
+                if new_token == eos_emb:
+                    break
+                tokenized_translation.append(new_token.item())
+                
+                emb = self.embedding_en(new_token)
+                emb = torch.concat((emb, out[:, -1:, :]), axis=2)
+
+            return self.dataset.ids2text(tokenized_translation)

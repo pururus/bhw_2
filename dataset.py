@@ -76,7 +76,7 @@ class TextDataset(Dataset):
     TRAIN_VAL_RANDOM_SEED = 42
     VAL_RATIO = 0.05
 
-    def __init__(self, data_file: str, target_file: Optional[str], train: bool = True, max_length: int = 128, min_samples=5):
+    def __init__(self, data_file: str, target_file: Optional[str], train: bool = True, max_length: int = 128, min_samples=5, tokenizers=None):
         """
         Dataset with texts, supporting BPE tokenizer
         :param data_file: txt file containing texts
@@ -95,8 +95,11 @@ class TextDataset(Dataset):
             with open(target_file, encoding="utf-8") as file:
                 self.texts_en = file.readlines()
         
-        self.tokenizer_de = WordTokenizer(min_samples=min_samples).fit(data_file)
-        self.tokenizer_en = WordTokenizer(min_samples=min_samples).fit(target_file)
+        if tokenizers is None:
+            self.tokenizer_de = WordTokenizer(min_samples=min_samples).fit(data_file)
+            self.tokenizer_en = WordTokenizer(min_samples=min_samples).fit(target_file)
+        else:
+            self.tokenizer_de, self.tokenizer_en = tokenizers
 
         """
         YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿

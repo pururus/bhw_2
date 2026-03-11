@@ -8,12 +8,14 @@ from IPython.display import clear_output
 from tqdm import tqdm
 from model import LanguageModel
 
+import sacrebleu
+
 
 sns.set_style('whitegrid')
 plt.rcParams.update({'font.size': 15})
 
 
-def plot_losses(train_losses: List[float], val_losses: Optional[List[float]] = None):
+def plot_losses(train_losses: List[float], val_losses: Optional[List[float]] = None, bleus=None, iters=None):
     """
     Plot loss and perplexity of train and validation samples
     :param train_losses: list of train losses at each epoch
@@ -30,10 +32,9 @@ def plot_losses(train_losses: List[float], val_losses: Optional[List[float]] = N
     Calculate train and validation perplexities given lists of losses
     """
     # train_perplexities, val_perplexities = torch.tensor(train_losses).exp(), torch.tensor(val_losses).exp()
-
-    # axs[1].plot(range(1, len(train_perplexities) + 1), train_perplexities, label='train')
-    # axs[1].plot(range(1, len(val_perplexities) + 1), val_perplexities, label='val')
-    # axs[1].set_ylabel('perplexity')
+    if bleus is not None:
+        axs[1].plot(iters, bleus, label='train')
+        axs[1].set_ylabel('bleu')
 
     for ax in axs:
         ax.set_xlabel('epoch')
@@ -98,17 +99,42 @@ def validation_epoch(model: LanguageModel, criterion: nn.Module,
         Process one validation step: calculate loss.
         Accumulate sum of losses for different batches in val_loss
         """
-        indices = indices.to(device)
+        indices[0] = indices[0].to(device)
+        indices[1] = indices[1].to(device)
         logits = model(indices, lengths)
-        loss = criterion(logits[:, :-1].reshape(-1, model.dataset.vocab_size), indices[:, 1:lengths.max()].reshape(-1))
+        loss = criterion(logits[:, :-1].reshape(-1, model.dataset.vocab_size_en), indices[1][:, 1:lengths[1].max().item()].reshape(-1))
+        loss.backward()
         val_loss += loss * indices.shape[0]
 
     val_loss /= len(loader.dataset)
     return val_loss.detach().cpu()
 
+def get_bleu(model, loader, tqdm_desc: str):
+    refs = []
+    trans = []
+    device = next(model.parameters()).device
+
+    model.eval()
+    for indices, lengths in tqdm(loader, desc=tqdm_desc):
+        """
+        YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
+        Process one validation step: calculate loss.
+        Accumulate sum of losses for different batches in val_loss
+        """
+        indices[0] = indices[0].to(device)
+        indices[1] = indices[1].to(device)
+        text_de = model.dataset.ids2text(indices[0][0], "de").replace("<pad>", "").replace("<bos>", "").replace("<eos>", "")
+        text_en = model.dataset.ids2text(indices[1][0], "en").replace("<pad>", "").replace("<bos>", "").replace("<eos>", "")
+        refs.extend(text_en)
+        
+        for text in text_de:
+            trans.append(model.inference(text, 0.5))
+    
+    return sacrebleu.corpus_bleu(trans, refs)
+        
 
 def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Optional[Any],
-          train_loader: DataLoader, val_loader: Optional[DataLoader], num_epochs: int = 5, num_examples=1):
+          train_loader: DataLoader, val_loader: Optional[DataLoader], num_epochs: int = 5, num_examples=1, bleu_iter=1):
     """
     Train language model for several epochs
     :param model: language model to train
@@ -120,6 +146,8 @@ def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Opt
     :param num_examples: number of generation examples to print after each epoch
     """
     train_losses, val_losses = [], []
+    bleus = []
+    iters = []
     criterion = nn.CrossEntropyLoss(ignore_index=model.dataset.pad_id_en)
 
     for epoch in range(1, num_epochs + 1):
@@ -127,17 +155,21 @@ def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Opt
             model, optimizer, criterion, train_loader,
             tqdm_desc=f'Training {epoch}/{num_epochs}'
         )
-        # val_loss = validation_epoch(
-        #     model, criterion, val_loader,
-        #     tqdm_desc=f'Validating {epoch}/{num_epochs}'
-        # )
+        val_loss = validation_epoch(
+            model, criterion, val_loader,
+            tqdm_desc=f'Validating {epoch}/{num_epochs}'
+        )
 
         if scheduler is not None:
             scheduler.step()
 
         train_losses += [train_loss]
         # val_losses += [val_loss]
-        plot_losses(train_losses)
+        if (epoch + 1) % bleu_iter == 0:
+            bleus.append(get_bleu(model, val_loader, "computing_bleu"))
+            iters.append(epoch)
+            
+        plot_losses(train_losses, bleu=bleus, iters=iters)
 
         print('Generation examples:')
         it = iter(val_loader)
