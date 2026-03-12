@@ -168,7 +168,7 @@ class TextDataset(Dataset):
         :return: encoded text indices and its actual length (including BOS and EOS specials)
         """
         """
-        YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
+        YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿
         Take corresponding index array from self.indices,
         add special tokens (self.bos_id and self.eos_id) and 
         pad to self.max_length using self.pad_id.

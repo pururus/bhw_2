@@ -15,7 +15,7 @@ sns.set_style('whitegrid')
 plt.rcParams.update({'font.size': 15})
 
 
-def plot_losses(train_losses: List[float], val_losses: Optional[List[float]] = None, bleus=None, iters=None):
+def plot_losses(train_losses: List[float], val_losses: Optional[List[float]] = None, bleu=None, iters=None):
     """
     Plot loss and perplexity of train and validation samples
     :param train_losses: list of train losses at each epoch
@@ -24,16 +24,16 @@ def plot_losses(train_losses: List[float], val_losses: Optional[List[float]] = N
     clear_output()
     fig, axs = plt.subplots(1, 2, figsize=(13, 4))
     axs[0].plot(range(1, len(train_losses) + 1), train_losses, label='train')
-    # axs[0].plot(range(1, len(val_losses) + 1), val_losses, label='val')
+    axs[0].plot(range(1, len(val_losses) + 1), val_losses, label='val')
     axs[0].set_ylabel('loss')
 
     """
-    YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿
+    YOUR CODE HERE (⊃｡•́‿•̀｡)⊃━✿✿✿✿✿✿s
     Calculate train and validation perplexities given lists of losses
     """
     # train_perplexities, val_perplexities = torch.tensor(train_losses).exp(), torch.tensor(val_losses).exp()
-    if bleus is not None:
-        axs[1].plot(iters, bleus, label='train')
+    if bleu is not None:
+        axs[1].plot(iters, bleu, label='train')
         axs[1].set_ylabel('bleu')
 
     for ax in axs:
@@ -102,13 +102,13 @@ def validation_epoch(model: LanguageModel, criterion: nn.Module,
         indices[0] = indices[0].to(device)
         indices[1] = indices[1].to(device)
         logits = model(indices, lengths)
-        loss = criterion(logits[:, :-1].reshape(-1, model.dataset.vocab_size_en), indices[1][:, 1:lengths[1].max().item()].reshape(-1))
-        loss.backward()
-        val_loss += loss * indices.shape[0]
+        loss = criterion(logits[:, :lengths[1].max().item()-1].reshape(-1, model.dataset.vocab_size_en), indices[1][:, 1:lengths[1].max().item()].reshape(-1))
+        val_loss += loss * indices[1].shape[0]
 
     val_loss /= len(loader.dataset)
     return val_loss.detach().cpu()
 
+@torch.no_grad()
 def get_bleu(model, loader, tqdm_desc: str):
     refs = []
     trans = []
@@ -130,7 +130,7 @@ def get_bleu(model, loader, tqdm_desc: str):
         for text in text_de:
             trans.append(model.inference(text, 0.5))
     
-    return sacrebleu.corpus_bleu(trans, refs)
+    return sacrebleu.corpus_bleu(trans, refs).score
         
 
 def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Optional[Any],
@@ -148,7 +148,7 @@ def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Opt
     train_losses, val_losses = [], []
     bleus = []
     iters = []
-    criterion = nn.CrossEntropyLoss(ignore_index=model.dataset.pad_id_en)
+    criterion = nn.CrossEntropyLoss(ignore_index=model.dataset.pad_id_en, label_smoothing=0.1)
 
     for epoch in range(1, num_epochs + 1):
         train_loss = training_epoch(
@@ -164,17 +164,20 @@ def train(model: LanguageModel, optimizer: torch.optim.Optimizer, scheduler: Opt
             scheduler.step()
 
         train_losses += [train_loss]
-        # val_losses += [val_loss]
+        val_losses += [val_loss]
         if (epoch + 1) % bleu_iter == 0:
             bleus.append(get_bleu(model, val_loader, "computing_bleu"))
             iters.append(epoch)
             
-        plot_losses(train_losses, bleu=bleus, iters=iters)
+        plot_losses(train_losses, bleu=bleus, iters=iters, val_losses=val_losses)
 
         print('Generation examples:')
         it = iter(val_loader)
-        for _ in range(num_examples):
-            ids, _ = next(it)
-            print("Doich:", model.dataset.ids2text(ids[0][0], "de").replace("<pad>", ""))
-            print("Eng:", model.inference(model.dataset.ids2text(ids[0][0])))
-            print("_________________________________________________________________________")
+        
+        with torch.no_grad():
+            model.eval()
+            for _ in range(num_examples):
+                ids, _ = next(it)
+                print("Doich:", model.dataset.ids2text(ids[0][0], "de").replace("<pad>", ""))
+                print("Eng:", model.inference(model.dataset.ids2text(ids[0][0])))
+                print("_________________________________________________________________________")

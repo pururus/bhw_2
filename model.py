@@ -113,7 +113,7 @@ class LanguageModel(nn.Module):
 class LanguageModelTransformer(nn.Module):
     def __init__(self, dataset: TextDataset, 
                  d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6, 
-                 dim_feedforward=2048, dropout=0.1):
+                 dim_feedforward=2048, dropout=0.1, dropout_emb=0.3):
         """
         Model for text generation
         :param dataset: text data dataset (to extract vocab_size and max_length)
@@ -139,6 +139,9 @@ class LanguageModelTransformer(nn.Module):
                                     dropout=dropout, batch_first=True)         
         self.linear = nn.Linear(d_model, self.vocab_size_en)
 
+        self.d_model = torch.tensor(d_model)
+        self.dropout = nn.Dropout(dropout_emb)
+
     def forward(self, indices: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """
         Compute forward pass through the model and
@@ -152,16 +155,18 @@ class LanguageModelTransformer(nn.Module):
         Convert indices to embeddings, pass them through recurrent layers
         and apply output linear layer to obtain the logits
         """
-        emb = self.embedding_de(indices[0])
-        emb_en = self.embedding_en(indices[1])
+        emb = self.embedding_de(indices[0]) * torch.sqrt(self.d_model)
+        emb_en = self.embedding_en(indices[1][:, :-1]) * torch.sqrt(self.d_model)
+        emb_en = self.dropout(emb_en)
         device = next(self.trans.parameters()).device
-        
+
         out = self.trans(emb, emb_en,
                             tgt_mask=nn.Transformer.generate_square_subsequent_mask(emb_en.shape[1], device=device),
-                            src_padding_mask=(indices[0]==self.dataset.pad_id_de),
-                            tgt_padding_mask=(indices[1]==self.dataset.pad_id_en))
+                            src_key_padding_mask=(indices[0]==self.dataset.pad_id_de),
+                            tgt_key_padding_mask=(indices[1][:, :-1]==self.dataset.pad_id_en))
+        out = self.dropout(out)
         logits = self.linear(out)
-        
+
         return logits
 
     @torch.inference_mode()
@@ -185,28 +190,27 @@ class LanguageModelTransformer(nn.Module):
         """
         device = next(self.trans.parameters()).device
         with torch.no_grad():
-            tokenized_prefix = [self.dataset.bos_id_de] + self.dataset.text2ids(prefix) + [self.dataset.eos_id_de]
-            emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
+            tokenized_prefix = self.dataset.text2ids(prefix)
+            emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device)) * torch.sqrt(self.d_model)
+
             eos_emb = self.dataset.eos_id_en
             tokenized_translation = []
-            
-            beginings = torch.tensor([[self.dataset.bos_id_en]])
-            emb_en = self.embedding_en(beginings.to(device = next(self.parameters()).device))
-            
+            beginings = [self.dataset.bos_id_en]
+            emb_en = self.embedding_en(torch.tensor([beginings]).to(device)) * torch.sqrt(self.d_model)
+
             context = self.trans.encoder(emb)
-            
+
             for _ in range(self.dataset.max_length):
                 out = self.trans.decoder(emb_en, context, 
                                          tgt_mask=nn.Transformer.generate_square_subsequent_mask(emb_en.shape[1], device=device))
                 logits = self.linear(out)[:, -1:, :] / temp
                 probs = torch.softmax(logits[0], dim=-1)
                 new_token = torch.multinomial(probs, num_samples=1)
-                
-                tokenized_translation.append(new_token.item())
                 if new_token == eos_emb:
                     break
-                
-                emb = self.embedding_en(new_token)
-                emb = torch.concat((emb, out[:, -1:, :]), axis=2)
+                tokenized_translation.append(new_token.item())
+
+                beginings.append(new_token.item())
+                emb_en = self.embedding_en(torch.tensor([beginings]).to(device)) * torch.sqrt(self.d_model)
 
             return self.dataset.ids2text(tokenized_translation)
