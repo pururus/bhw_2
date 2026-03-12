@@ -69,7 +69,7 @@ def training_epoch(model: LanguageModel, optimizer: torch.optim.Optimizer, crite
         indices[0] = indices[0].to(device)
         indices[1] = indices[1].to(device)
         logits = model(indices, lengths)
-        loss = criterion(logits[:, :-1].reshape(-1, model.dataset.vocab_size_en), indices[1][:, 1:lengths[1].max().item()].reshape(-1))
+        loss = criterion(logits[:, :lengths[1].max().item()-1].reshape(-1, model.dataset.vocab_size_en), indices[1][:, 1:lengths[1].max().item()].reshape(-1))
         loss.backward()
         optimizer.step()
         train_loss += loss * indices[1].shape[0]

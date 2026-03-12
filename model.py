@@ -7,7 +7,8 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class LanguageModel(nn.Module):
     def __init__(self, dataset: TextDataset, embed_size: int = 256, hidden_size: int = 256,
-                 rnn_type: Type = nn.RNN, rnn_layers: int = 1):
+                 rnn_type: Type = nn.RNN, rnn_layers: int = 1, 
+                 dropout=0.3):
         """
         Model for text generation
         :param dataset: text data dataset (to extract vocab_size and max_length)
@@ -31,6 +32,7 @@ class LanguageModel(nn.Module):
         self.rnn_encoder = rnn_type(embed_size, hidden_size, rnn_layers, batch_first=True)
         self.rnn_decoder = rnn_type(embed_size + hidden_size, hidden_size, rnn_layers, batch_first=True)
         self.linear = nn.Linear(hidden_size, self.vocab_size_en)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, indices: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """
@@ -53,10 +55,12 @@ class LanguageModel(nn.Module):
         emb_en = self.embedding_en(indices[1])
 
         emb_en = torch.concat((emb_en, torch.tile(out_enc[:, -1:, :], (1, emb_en.shape[1], 1))), axis=2)
+        emb_en = self.dropout(emb_en)
         emb_en = pack_padded_sequence(emb_en, lengths[1], batch_first=True, enforce_sorted=False)
         
         out, _ = self.rnn_decoder(emb_en, h)
         out, _ = pad_packed_sequence(out, batch_first=True, total_length=lengths[1].max())
+        out = self.dropout(out)
         logits = self.linear(out)
         
         return logits
@@ -81,29 +85,30 @@ class LanguageModel(nn.Module):
         Do not forget to divide predicted logits by temperature before sampling
         """
         with torch.no_grad():
-            tokenized_prefix = self.dataset.text2ids(prefix)
+            tokenized_prefix = [self.dataset.bos_id_de] + self.dataset.text2ids(prefix) + [self.dataset.eos_id_de]
             emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
             eos_emb = self.dataset.eos_id_en
             tokenized_translation = []
             out_enc, h = self.rnn_encoder(emb)
 
             beginings = torch.tensor([[self.dataset.bos_id_en]])
-            emb = self.embedding_de(beginings.to(device = next(self.parameters()).device))
+            emb = self.embedding_en(beginings.to(device = next(self.parameters()).device))
             
-            emb = torch.concat((emb, out_enc[:, -1:, :]), axis=2)
+            emb = torch.concat((emb, out_enc.mean(dim=1, keepdim=True)), axis=2)
             for _ in range(self.dataset.max_length):
                 out, h = self.rnn_decoder(emb, h)
                 logits = self.linear(out)[:, -1:, :] / temp
                 probs = torch.softmax(logits[0], dim=-1)
                 new_token = torch.multinomial(probs, num_samples=1)
+                tokenized_translation.append(new_token.item())
                 if new_token == eos_emb:
                     break
-                tokenized_translation.append(new_token.item())
                 
                 emb = self.embedding_en(new_token)
-                emb = torch.concat((emb, out_enc[:, -1:, :]), axis=2)
+                emb = torch.concat((emb, out_enc.mean(dim=1, keepdim=True)), axis=2)
 
             return self.dataset.ids2text(tokenized_translation)
+
 
 class LanguageModelTransformer(nn.Module):
     def __init__(self, dataset: TextDataset, 
@@ -180,7 +185,7 @@ class LanguageModelTransformer(nn.Module):
         """
         device = next(self.trans.parameters()).device
         with torch.no_grad():
-            tokenized_prefix = self.dataset.text2ids(prefix)
+            tokenized_prefix = [self.dataset.bos_id_de] + self.dataset.text2ids(prefix) + [self.dataset.eos_id_de]
             emb = self.embedding_de(torch.tensor(tokenized_prefix).unsqueeze(0).to(device = next(self.parameters()).device))
             eos_emb = self.dataset.eos_id_en
             tokenized_translation = []
@@ -196,9 +201,10 @@ class LanguageModelTransformer(nn.Module):
                 logits = self.linear(out)[:, -1:, :] / temp
                 probs = torch.softmax(logits[0], dim=-1)
                 new_token = torch.multinomial(probs, num_samples=1)
+                
+                tokenized_translation.append(new_token.item())
                 if new_token == eos_emb:
                     break
-                tokenized_translation.append(new_token.item())
                 
                 emb = self.embedding_en(new_token)
                 emb = torch.concat((emb, out[:, -1:, :]), axis=2)
